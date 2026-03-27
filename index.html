@@ -103,10 +103,11 @@
           session: {
             modalities: ['text'],
             input_audio_transcription: { model: 'whisper-1' },
-            instructions: `You are an interview coach. Identify the interviewer's question type and provide medium-depth guidance for how to answer. Keep responses brief and structured.`
+            instructions: `You are an interview coach. Identify the interviewer's question type and provide medium-depth guidance for how to answer. Keep responses brief and structured. Format each response as:\nQuestion type: <type>\nFramework: <framework>\nSuggestions: <short advice>`
           }
         }));
 
+        let lastCommit = Date.now();
         processor.onaudioprocess = (e) => {
           const input = e.inputBuffer.getChannelData(0);
           const pcm = new Int16Array(input.length);
@@ -114,7 +115,18 @@
             let s = Math.max(-1, Math.min(1, input[i]));
             pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
           }
-          ws.send(pcm.buffer);
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
+          ws.send(JSON.stringify({
+            type: 'input_audio_buffer.append',
+            audio: b64
+          }));
+
+          const now = Date.now();
+          if (now - lastCommit > 3000) {
+            lastCommit = now;
+            ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+            ws.send(JSON.stringify({ type: 'response.create' }));
+          }
         };
       };
 
@@ -139,8 +151,9 @@
               if(m) frameworkEl.textContent = 'Framework: ' + m[1].split('\n')[0].trim();
             }
           }
-          if(msg.type === 'response.completed' && msg.response?.output_text){
-            addSuggestion(msg.response.output_text.trim());
+          if(msg.type === 'response.completed' && (msg.response?.output_text || msg.response?.output?.[0]?.content?.[0]?.text)){
+            const txt = msg.response.output_text || msg.response.output?.[0]?.content?.[0]?.text || '';
+            if (txt) addSuggestion(txt.trim());
           }
         } catch(e){ /* ignore */ }
       };
