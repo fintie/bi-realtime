@@ -175,7 +175,10 @@
       };
 
       ws.onerror = (e) => { console.error(e); wsStatusEl.textContent = 'WS: error'; logDebug('WebSocket error'); alert('WebSocket error. Check relay URL.'); };
-      ws.onclose = () => { wsStatusEl.textContent = 'WS: closed'; logDebug('WebSocket closed'); };
+      ws.onclose = (e) => {
+        wsStatusEl.textContent = 'WS: closed';
+        logDebug(`WebSocket closed (code=${e.code}, reason=${e.reason || 'n/a'})`);
+      };
     }
 
     function stop(){
