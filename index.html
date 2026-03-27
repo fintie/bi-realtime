@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interview Realtime Coach</title>
+  <style>
+    :root { --bg:#0b0f1a; --card:#121827; --text:#e6e8ee; --muted:#9aa3b2; --accent:#6ee7ff; --warn:#ffd166; }
+    *{box-sizing:border-box;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    body{margin:0;background:var(--bg);color:var(--text);}  
+    header{padding:20px 24px;border-bottom:1px solid #1f2638;display:flex;align-items:center;gap:12px;}
+    header h1{font-size:18px;margin:0;}
+    .container{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;padding:16px;}
+    .card{background:var(--card);border:1px solid #1f2638;border-radius:12px;padding:14px;}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+    .row input, .row select{background:#0f1422;border:1px solid #26304a;color:var(--text);padding:8px 10px;border-radius:8px;min-width:220px;}
+    .row button{background:var(--accent);color:#001018;border:none;padding:8px 12px;border-radius:8px;font-weight:600;cursor:pointer;}
+    .row button.secondary{background:#1f2638;color:var(--text);}  
+    .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#1b2338;color:var(--accent);font-size:12px;margin-right:6px;}
+    .muted{color:var(--muted);font-size:12px;}
+    .log{height:320px;overflow:auto;white-space:pre-wrap;line-height:1.5;font-size:14px;}
+    .suggestions{display:flex;flex-direction:column;gap:10px;}
+    .tip{background:#0f1422;border:1px solid #26304a;border-radius:10px;padding:10px;}
+    .tip strong{color:var(--warn);}
+    footer{padding:12px 16px;color:var(--muted);font-size:12px;}
+    @media(max-width:900px){.container{grid-template-columns:1fr;}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Interview Realtime Coach</h1>
+    <span class="muted">Web · OpenClaw Relay · OpenAI Realtime</span>
+  </header>
+
+  <div class="container">
+    <div class="card">
+      <div class="row" style="margin-bottom:10px;">
+        <input id="relayUrl" placeholder="Relay WebSocket URL" />
+        <select id="model">
+          <option value="gpt-4o-realtime-preview">gpt-4o-realtime-preview</option>
+          <option value="gpt-4o-mini-realtime-preview">gpt-4o-mini-realtime-preview</option>
+        </select>
+        <button id="btnStart">Start</button>
+        <button id="btnStop" class="secondary">Stop</button>
+      </div>
+      <div class="muted">Default relay URL example: <code>wss://YOUR-RELAY-HOST/v1/realtime?model=gpt-4o-realtime-preview</code></div>
+      <hr style="border:0;border-top:1px solid #1f2638;margin:12px 0;" />
+      <div class="row" style="margin-bottom:8px;">
+        <span class="pill" id="qType">Question type: –</span>
+        <span class="pill" id="framework">Framework: –</span>
+      </div>
+      <div class="log" id="transcript">Waiting for audio…</div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px 0;">Realtime Suggestions</h3>
+      <div class="suggestions" id="suggestions">
+        <div class="tip"><strong>Tip:</strong> Speak clearly and include a measurable outcome when possible.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    This MVP analyzes interviewer questions and provides medium-depth answer guidance. Audio is captured in the browser.
+  </footer>
+
+  <script>
+    const relayInput = document.getElementById('relayUrl');
+    const modelSelect = document.getElementById('model');
+    const transcriptEl = document.getElementById('transcript');
+    const suggestionsEl = document.getElementById('suggestions');
+    const qTypeEl = document.getElementById('qType');
+    const frameworkEl = document.getElementById('framework');
+    let ws, mediaStream, audioContext, processor;
+
+    const defaultRelay = localStorage.getItem('relayUrl') || '';
+    relayInput.value = defaultRelay;
+
+    function addSuggestion(text){
+      const div = document.createElement('div');
+      div.className = 'tip';
+      div.innerHTML = `<strong>Suggestion:</strong> ${text}`;
+      suggestionsEl.prepend(div);
+      while (suggestionsEl.children.length > 6) suggestionsEl.removeChild(suggestionsEl.lastChild);
+    }
+
+    async function start(){
+      const relay = relayInput.value.trim();
+      if(!relay){ alert('Please set Relay WebSocket URL'); return; }
+      localStorage.setItem('relayUrl', relay);
+
+      ws = new WebSocket(relay);
+      ws.onopen = async () => {
+        // Request mic
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        source.connect(processor); processor.connect(audioContext.destination);
+
+        ws.send(JSON.stringify({
+          type: 'session.update',
+          session: {
+            modalities: ['text'],
+            input_audio_transcription: { model: 'whisper-1' },
+            instructions: `You are an interview coach. Identify the interviewer's question type and provide medium-depth guidance for how to answer. Keep responses brief and structured.`
+          }
+        }));
+
+        processor.onaudioprocess = (e) => {
+          const input = e.inputBuffer.getChannelData(0);
+          const pcm = new Int16Array(input.length);
+          for (let i=0;i<input.length;i++) {
+            let s = Math.max(-1, Math.min(1, input[i]));
+            pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
+          ws.send(pcm.buffer);
+        };
+      };
+
+      ws.onmessage = (event) => {
+        try{
+          const msg = JSON.parse(event.data);
+          if(msg.type === 'response.output_text.delta'){
+            transcriptEl.textContent += msg.delta;
+          }
+          if(msg.type === 'response.output_text.done'){
+            transcriptEl.textContent += '\n';
+          }
+          if(msg.type === 'response.output_text.done' || msg.type === 'response.output_text.delta'){
+            // naive parse for tags
+            const t = transcriptEl.textContent;
+            if(t.includes('Question type:')){
+              const m = t.match(/Question type:\s*(.*)/i);
+              if(m) qTypeEl.textContent = 'Question type: ' + m[1].split('\n')[0].trim();
+            }
+            if(t.includes('Framework:')){
+              const m = t.match(/Framework:\s*(.*)/i);
+              if(m) frameworkEl.textContent = 'Framework: ' + m[1].split('\n')[0].trim();
+            }
+          }
+          if(msg.type === 'response.completed' && msg.response?.output_text){
+            addSuggestion(msg.response.output_text.trim());
+          }
+        } catch(e){ /* ignore */ }
+      };
+
+      ws.onerror = (e) => { console.error(e); alert('WebSocket error. Check relay URL.'); };
+    }
+
+    function stop(){
+      if(processor){ processor.disconnect(); processor = null; }
+      if(audioContext){ audioContext.close(); audioContext = null; }
+      if(mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream=null; }
+      if(ws){ ws.close(); ws = null; }
+    }
+
+    document.getElementById('btnStart').onclick = start;
+    document.getElementById('btnStop').onclick = stop;
+  </script>
+</body>
+</html>
