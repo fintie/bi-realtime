@@ -114,7 +114,8 @@
         ws.send(JSON.stringify({
           type: 'session.update',
           session: {
-            modalities: ['text'],
+            modalities: ['audio','text'],
+            input_audio_format: 'pcm16',
             input_audio_transcription: { model: 'whisper-1' },
             instructions: `You are an interview coach. Identify the interviewer's question type and provide medium-depth guidance for how to answer. Keep responses brief and structured. Format each response as:\nQuestion type: <type>\nFramework: <framework>\nSuggestions: <short advice>`
           }
@@ -123,6 +124,7 @@
 
         let lastCommit = Date.now();
         processor.onaudioprocess = (e) => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
           const input = e.inputBuffer.getChannelData(0);
           const pcm = new Int16Array(input.length);
           for (let i=0;i<input.length;i++) {
