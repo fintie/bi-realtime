@@ -46,10 +46,13 @@
       <div class="muted">Default relay URL example: <code>wss://YOUR-RELAY-HOST/v1/realtime?model=gpt-4o-realtime-preview</code></div>
       <hr style="border:0;border-top:1px solid #1f2638;margin:12px 0;" />
       <div class="row" style="margin-bottom:8px;">
+        <span class="pill" id="wsStatus">WS: idle</span>
         <span class="pill" id="qType">Question type: –</span>
         <span class="pill" id="framework">Framework: –</span>
       </div>
       <div class="log" id="transcript">Waiting for audio…</div>
+      <h4 style="margin:12px 0 6px 0;">Debug log</h4>
+      <div class="log" id="debug">—</div>
     </div>
 
     <div class="card">
@@ -71,10 +74,17 @@
     const suggestionsEl = document.getElementById('suggestions');
     const qTypeEl = document.getElementById('qType');
     const frameworkEl = document.getElementById('framework');
+    const wsStatusEl = document.getElementById('wsStatus');
+    const debugEl = document.getElementById('debug');
     let ws, mediaStream, audioContext, processor;
 
     const defaultRelay = localStorage.getItem('relayUrl') || '';
     relayInput.value = defaultRelay;
+
+    function logDebug(msg){
+      const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      debugEl.textContent = (debugEl.textContent === '—') ? line : (line + '\n' + debugEl.textContent);
+    }
 
     function addSuggestion(text){
       const div = document.createElement('div');
@@ -89,8 +99,11 @@
       if(!relay){ alert('Please set Relay WebSocket URL'); return; }
       localStorage.setItem('relayUrl', relay);
 
+      wsStatusEl.textContent = 'WS: connecting';
       ws = new WebSocket(relay);
       ws.onopen = async () => {
+        wsStatusEl.textContent = 'WS: open';
+        logDebug('WebSocket opened');
         // Request mic
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioContext = new AudioContext({ sampleRate: 16000 });
@@ -106,6 +119,7 @@
             instructions: `You are an interview coach. Identify the interviewer's question type and provide medium-depth guidance for how to answer. Keep responses brief and structured. Format each response as:\nQuestion type: <type>\nFramework: <framework>\nSuggestions: <short advice>`
           }
         }));
+        logDebug('session.update sent');
 
         let lastCommit = Date.now();
         processor.onaudioprocess = (e) => {
@@ -126,6 +140,7 @@
             lastCommit = now;
             ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
             ws.send(JSON.stringify({ type: 'response.create' }));
+            logDebug('commit + response.create');
           }
         };
       };
@@ -133,6 +148,7 @@
       ws.onmessage = (event) => {
         try{
           const msg = JSON.parse(event.data);
+          if (msg.type) logDebug('recv: ' + msg.type);
           if(msg.type === 'response.output_text.delta'){
             transcriptEl.textContent += msg.delta;
           }
@@ -155,10 +171,11 @@
             const txt = msg.response.output_text || msg.response.output?.[0]?.content?.[0]?.text || '';
             if (txt) addSuggestion(txt.trim());
           }
-        } catch(e){ /* ignore */ }
+        } catch(e){ logDebug('recv parse error'); }
       };
 
-      ws.onerror = (e) => { console.error(e); alert('WebSocket error. Check relay URL.'); };
+      ws.onerror = (e) => { console.error(e); wsStatusEl.textContent = 'WS: error'; logDebug('WebSocket error'); alert('WebSocket error. Check relay URL.'); };
+      ws.onclose = () => { wsStatusEl.textContent = 'WS: closed'; logDebug('WebSocket closed'); };
     }
 
     function stop(){
@@ -166,6 +183,8 @@
       if(audioContext){ audioContext.close(); audioContext = null; }
       if(mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream=null; }
       if(ws){ ws.close(); ws = null; }
+      wsStatusEl.textContent = 'WS: idle';
+      logDebug('Stopped');
     }
 
     document.getElementById('btnStart').onclick = start;
